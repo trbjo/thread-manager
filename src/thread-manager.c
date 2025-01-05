@@ -1,118 +1,84 @@
 #include <stdatomic.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include <linux/futex.h>
 #include <pthread.h>
-#include <sched.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
 #include "thread-manager.h"
 
-static ThreadPool* g_thread_pool = NULL;
+static ThreadPool* g_pool = NULL;
 
 static void* worker_thread(void* arg) {
-    const uint8_t base_chunk = (uintptr_t)arg >> 52;
-    ThreadPool* pool = (ThreadPool*)((uintptr_t)arg & ((1ULL << 48) - 1));
-    uint8_t chunk = base_chunk % CHUNKS;
+    while (!atomic_load(&g_pool->shutdown.value)) {
+        syscall(SYS_futex, &g_pool->push_counter.value, FUTEX_WAIT_PRIVATE, atomic_load(&g_pool->pull_counter.value), NULL, NULL, 0);
+        uint32_t chunk = WRAP_SLOT(atomic_fetch_add(&g_pool->pull_counter.value, 1));
+        unsigned long packed_data = atomic_exchange(&g_pool->task_data[chunk].value, 0);
+        if (packed_data) {
+            unsigned long packed_funcs = atomic_exchange(&g_pool->task_handles[chunk].value, 0);
+            syscall(SYS_futex, &g_pool->task_handles[chunk].value, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
 
-    while (!atomic_load(&pool->shutdown)) {
-        unsigned long old = atomic_load(&pool->ready[chunk].value);
-        if (old && atomic_compare_exchange_strong(&pool->ready[chunk].value, &old, CLEAR_LOWEST_BIT(old))) {
-            atomic_fetch_sub(&pool->tasks, 1);
-            int bit = LOWEST_SET_BIT(old);
-            int slot = bit + (chunk * BITS_PER_CHUNK);
-
-            TaskFunc task_func = pool->task_handles[slot].task;
-            void* task_data = pool->task_handles[slot].task_user_data;
-            TaskDestroy task_destroy = pool->task_handles[slot].task_destroy;
-
-            atomic_fetch_and(&pool->claimed[chunk].value, UNSET_BIT_MASK(bit));
-
+            TaskFunc task_func = (TaskFunc)(packed_funcs & VIRTUAL_ADDRESS_MASK);
+            TaskDestroy destroy = (TaskDestroy)((uintptr_t)task_func + (int16_t)(packed_funcs >> 48));
+            void* task_data = (void*)(uintptr_t)(packed_data & VIRTUAL_ADDRESS_MASK);
             task_func(task_data);
-            if (task_destroy) {
-                task_destroy(task_data);
+            if (destroy) {
+                destroy(task_data);
             }
-        } else if (syscall(SYS_futex, &pool->tasks, FUTEX_WAIT_PRIVATE, 0, NULL, NULL, 0)) { // more work, just not in this trunk
-            __builtin_ia32_pause();
-            chunk = (base_chunk + chunk + 1) % CHUNKS;
-        } else { // futex slept, reset to base chunk
-            chunk = atomic_load(&pool->current_chunk) % CHUNKS;
+        } else {
+            atomic_fetch_sub(&g_pool->pull_counter.value, 1);
         }
     }
     return NULL;
 }
 
 void thread_pool_run(TaskFunc task, void* task_user_data, TaskDestroy task_destroy) {
-    atomic_fetch_add(&g_thread_pool->tasks, 1);
-    while (!atomic_load(&g_thread_pool->shutdown)) {
-        uint8_t chunk = atomic_fetch_add(&g_thread_pool->current_chunk, 1) % CHUNKS;
-        unsigned long old = atomic_load(&g_thread_pool->claimed[chunk].value);
+    uint32_t chunk = WRAP_SLOT(atomic_fetch_add(&g_pool->push_counter.value, 1));
 
-        if (old != CHUNK_FULL) {
-            int bit = LOWEST_UNSET_BIT(old);
-            unsigned long free_bit_position = 1UL << bit;
-            unsigned long new = old | free_bit_position;
+    intptr_t destroy_offset = (intptr_t)task_destroy - (intptr_t)task;
+    unsigned long packed_funcs = ((uintptr_t)task & VIRTUAL_ADDRESS_MASK) | (((unsigned long)(destroy_offset & 0xFFFF)) << 48);
+    unsigned long packed_data = ((uintptr_t)task_user_data & VIRTUAL_ADDRESS_MASK);
 
-            if (atomic_compare_exchange_strong(&g_thread_pool->claimed[chunk].value, &old, new)) {
-                syscall(SYS_futex, &g_thread_pool->tasks, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
-                int slot = bit + (chunk * BITS_PER_CHUNK);
+    unsigned long old;
+    while ((old = atomic_load(&g_pool->task_handles[chunk].value)) &&
+           !syscall(SYS_futex, &g_pool->task_handles[chunk].value, FUTEX_WAIT_PRIVATE, old, NULL, NULL, 0));
 
-                g_thread_pool->task_handles[slot].task = task;
-                g_thread_pool->task_handles[slot].task_user_data = task_user_data;
-                g_thread_pool->task_handles[slot].task_destroy = task_destroy;
-
-                atomic_fetch_or(&g_thread_pool->ready[chunk].value, free_bit_position);
-                return;
-            }
-        }
-        __builtin_ia32_pause();
-    }
-}
-
-static ThreadPool* thread_pool_create() {
-    ThreadPool* pool = calloc(1, sizeof(ThreadPool));
-    if (!pool) return NULL;
-
-    pool->max_threads = sysconf(_SC_NPROCESSORS_CONF);
-    pool->threads = malloc(sizeof(pthread_t) * pool->max_threads);
-    pool->task_handles = calloc(MAX_SLOTS, sizeof(TaskHandle));
-
-    atomic_init(&pool->shutdown, 0);
-    atomic_init(&pool->tasks, 0);
-    atomic_init(&pool->current_chunk, 0);
-
-    for (int i = 0; i < CHUNKS; i++) {
-        atomic_init(&pool->ready[i].value, 0);
-        atomic_init(&pool->claimed[i].value, 0);
-    }
-
-    uintptr_t base_ptr = (uintptr_t)pool;
-
-    for (uint8_t i = 0; i < pool->max_threads; i++) {
-        uintptr_t context = base_ptr | ((uintptr_t)i << 52);
-        pthread_create(&pool->threads[i], NULL, worker_thread, (void*)context);
-    }
-
-    return pool;
+    atomic_store(&g_pool->task_handles[chunk].value, packed_funcs);
+    atomic_store(&g_pool->task_data[chunk].value, packed_data);
+    syscall(SYS_futex, &g_pool->push_counter.value, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
 }
 
 void thread_pool_initialize() {
-    g_thread_pool = thread_pool_create();
+    g_pool = calloc(1, sizeof(ThreadPool));
+    if (!g_pool) return;
+
+    g_pool->max_threads = sysconf(_SC_NPROCESSORS_CONF);
+    g_pool->threads = malloc(sizeof(pthread_t) * g_pool->max_threads);
+
+    atomic_init(&g_pool->shutdown.value, 0);
+    atomic_init(&g_pool->pull_counter.value, 0);
+    atomic_init(&g_pool->push_counter.value, 0);
+
+    for (int i = 0; i < MAX_SLOTS; i++) {
+        atomic_init(&g_pool->task_handles[i].value, 0);
+        atomic_init(&g_pool->task_data[i].value, 0);
+    }
+
+    for (int i = 0; i < g_pool->max_threads; i++) {
+        pthread_create(&g_pool->threads[i], NULL, worker_thread, NULL);
+    }
 }
 
 void thread_pool_destroy() {
-    atomic_store(&g_thread_pool->shutdown, 1);
-    syscall(SYS_futex, &g_thread_pool->tasks, FUTEX_WAKE_PRIVATE, g_thread_pool->max_threads, NULL, NULL, 0);
+    atomic_store(&g_pool->shutdown.value, 1);
+    syscall(SYS_futex, &g_pool->push_counter.value, FUTEX_WAKE_PRIVATE, g_pool->max_threads, NULL, NULL, 0);
 
-    for (int i = 0; i < g_thread_pool->max_threads; i++) {
-        pthread_join(g_thread_pool->threads[i], NULL);
+    for (int i = 0; i < g_pool->max_threads; i++) {
+        pthread_join(g_pool->threads[i], NULL);
     }
 
-    free(g_thread_pool->task_handles);
-    free(g_thread_pool->threads);
-    free(g_thread_pool);
+    free(g_pool->threads);
+    free(g_pool);
 }
