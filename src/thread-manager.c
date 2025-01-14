@@ -1,66 +1,63 @@
-#include <stdint.h>
 #include <stdlib.h>
-#include <pthread.h>
 
 #include "thread-manager.h"
 
 static ThreadPool* g_pool;
 
 static void* worker_thread(void* arg) {
-    padded_atomic_ulong* slots = g_pool->slots;
-    atomic_ulong* next = &g_pool->next.value;
+    atomic128_t* slots = g_pool->slots;
+    atomic_ulong* next = &g_pool->next;
     uint16_t chunk = WRAP_SLOT(a_inc(next));
 
     while (1) {
-        uint64_t ptr = a_exchange(&slots[chunk].value, EMPTY);
-        if (ptr == IDLE) return NULL;
-        if (ptr) {
-            TaskSlot* slot = (TaskSlot*)ptr;
-            TaskFunc task_func = (TaskFunc)(slot->funcs & VIRTUAL_ADDRESS_MASK);
-            TaskDestroy destroy = (TaskDestroy)((char*)task_func + (int16_t)(slot->funcs >> 48));
-            void* task_data = (void*)(slot->data & VIRTUAL_ADDRESS_MASK);
+        uint64_t old_high, old_low;
+        atomic128_exchange(&slots[chunk], &old_high, &old_low, EMPTY, EMPTY);
 
-            task_func(task_data);
-            if (destroy) destroy(task_data);
-            free(slot);
+        if (old_high == DONE) return NULL;
+        if (old_low != EMPTY) {
+            TaskFunc func = (TaskFunc)(old_low & VIRTUAL_ADDRESS_MASK);
+            TaskDestroy destroy = (TaskDestroy)(func + (int16_t)(old_low >> 48));
+            void* data = (void*)old_high;
+
+            func(data);
+            if (destroy) destroy(data);
             chunk = WRAP_SLOT(a_inc(next));
-        } else if (a_cmp_exchange(&slots[chunk].value, &ptr, IDLE)) {
-            syscall(SYS_futex, &slots[chunk].value, FUTEX_WAIT_PRIVATE, IDLE, NULL, NULL, 0);
+        } else if (a_cmp_exchange(&slots[chunk].high, &old_high, DONE)) {
+            syscall(SYS_futex, &slots[chunk].high, FUTEX_WAIT_PRIVATE, DONE, NULL, NULL, 0);
         }
     }
 }
 
 void thread_pool_run(TaskFunc task, void* task_user_data, TaskDestroy task_destroy) {
-    TaskSlot* slot = malloc(sizeof(TaskSlot));
-    slot->funcs = ((uint64_t)task & VIRTUAL_ADDRESS_MASK) | ((uint64_t)((char*)task_destroy - (char*)task) << 48);
-    slot->data = (uint64_t)task_user_data & VIRTUAL_ADDRESS_MASK;
+    uint64_t low = (uint64_t)task | ((uint64_t)(task_destroy - task) << 48);
+    uint64_t high = (uint64_t)task_user_data;
 
-    const uint16_t chunk = WRAP_SLOT(a_inc(&g_pool->scheduled.value));
+    const uint16_t chunk = WRAP_SLOT(a_inc(&g_pool->scheduled));
 
-    uint64_t old = EMPTY;
-    while (!a_cmp_exchange(&g_pool->slots[chunk].value, &old, (uint64_t)slot)) {
-        if (old > IDLE) {
-            old = EMPTY;
-        }
-    }
+    uint64_t expected_low, expected_high;
+    do {
+        expected_high = g_pool->slots[chunk].high;
+        expected_low = EMPTY;
+    } while (!atomic128_compare_exchange(&g_pool->slots[chunk], &expected_high, &expected_low, high, low));
 
-    if (old == IDLE) {
-        syscall(SYS_futex, &g_pool->slots[chunk].value, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+    if (expected_high == DONE) {
+        syscall(SYS_futex, &g_pool->slots[chunk].high, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
     }
 }
 
-void thread_pool_initialize() {
-    g_pool = calloc(1, sizeof(ThreadPool));
+void thread_pool_initialize(void) {
+    g_pool = aligned_alloc(CACHE_LINE_SIZE, sizeof(ThreadPool));
     if (!g_pool) return;
 
     g_pool->max_threads = sysconf(_SC_NPROCESSORS_CONF);
     g_pool->threads = malloc(sizeof(pthread_t) * g_pool->max_threads);
 
-    atomic_init(&g_pool->next.value, 0);
-    atomic_init(&g_pool->scheduled.value, 0);
+    atomic_init(&g_pool->next, 0);
+    atomic_init(&g_pool->scheduled, 0);
 
+    const atomic128_t EMPTY_SLOT = {.low = 0ULL, .high = 0ULL};
     for (int i = 0; i < MAX_SLOTS; i++) {
-        atomic_init(&g_pool->slots[i].value, 0);
+        g_pool->slots[i] = EMPTY_SLOT;
     }
 
     for (int i = 0; i < g_pool->max_threads; i++) {
@@ -68,11 +65,11 @@ void thread_pool_initialize() {
     }
 }
 
-void thread_pool_destroy() {
-    uint64_t lowest = a_load(&g_pool->scheduled.value);
-    while (lowest <= a_load(&g_pool->next.value)) {
+void thread_pool_destroy(void) {
+    uint64_t lowest = a_load(&g_pool->scheduled);
+    while (lowest <= a_load(&g_pool->next)) {
         uint16_t chunk = WRAP_SLOT(lowest++);
-        syscall(SYS_futex, &g_pool->slots[chunk].value, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+        syscall(SYS_futex, &g_pool->slots[chunk].high, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
     }
 
     for (int i = 0; i < g_pool->max_threads; i++) {
