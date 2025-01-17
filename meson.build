@@ -4,11 +4,10 @@ project_name = 'io.github.trbjo.vala-libraries.thread-manager'
 inc = include_directories('src')
 
 optimization_flags = [
-    '-O3',                    # Base optimization level
-    '-march=native',          # CPU-specific optimizations
-    '-fno-plt',               # For function pointer calls
-    '-fno-stack-protector',   # Remove stack protection overhead
-    '-funroll-loops',         # Unroll loops
+    '-O3',
+    '-march=native',
+    '-fno-plt',
+    '-fno-stack-protector',
 ]
 
 vapi_dir = meson.current_source_dir()
