@@ -2,65 +2,57 @@
 #include <pthread.h>
 #include "thread-manager.h"
 
-static pthread_t* threads;
 static atomic_ulong __attribute__((aligned(CACHE_LINE_SIZE))) assigned = 0;
 static atomic_ulong __attribute__((aligned(CACHE_LINE_SIZE))) scheduled = 0;
 static uint128_t_padded slots[MAX_SLOTS] __attribute__((aligned(CACHE_LINE_SIZE)));
+static pthread_t* threads;
 
 static void* worker_thread(void* arg) {
-    uint16_t chunk = WRAP_SLOT(a_inc(&assigned));
+    uint8_t chunk = atomic_inc(&assigned);
     while (1) {
         uint128_t task = atomic128_load(&slots[chunk]);
-        if (task == DONE) return NULL;
+        if (task == SHUTDOWN) return NULL;
 
-        if (task != EMPTY && a128_cmp_exchange(&slots[chunk], &task, EMPTY)) {
-            TaskFunc func = (TaskFunc)((uintptr_t)task & VIRTUAL_ADDRESS_MASK);
-            TaskDestroy destroy = (TaskDestroy)(func + (int16_t)((uintptr_t)task >> 48));
-            void* data = (void*)(uintptr_t)(task >> 64);
+        if (task > DONE && atomic128_cas(&slots[chunk], &task, EMPTY)) {
+            TaskFunc func = (TaskFunc)((uint64_t)task & VIRTUAL_ADDRESS_MASK);
+            TaskDestroy destroy = (TaskDestroy)(func + (int32_t)(task >> 48));
+            void* data = (void*)(uint64_t)(task >> 80);
 
             func(data);
             if (destroy) destroy(data);
-            chunk = WRAP_SLOT(a_inc(&assigned));
-        } else if (task == EMPTY && a128_cmp_exchange(&slots[chunk], &task, DONE)) {
+            chunk = atomic_inc(&assigned);
+        } else if (task == EMPTY && atomic128_cas(&slots[chunk], &task, DONE)) {
             syscall(SYS_futex, &slots[chunk], FUTEX_WAIT_PRIVATE, DONE, NULL, NULL, 0);
         }
     }
 }
 
 void thread_pool_run(TaskFunc func, void* data, TaskDestroy destroy) {
-    uint128_t new_value = ((uint128_t)(uintptr_t)data << 64) | ((uintptr_t)(destroy - func) << 48) | ((uintptr_t)func);
+    uint128_t packed = ((uint128_t)((uint64_t)data) << 80) |           // User data ptr in upper 48 bits
+                       ((uint128_t)(uint32_t)(destroy - func)) << 48 | // TaskDestroy offset truncated to 32 bits to prevent sign extension
+                       (uint64_t)func;                                 // TaskFunc in lower 48 bits
 
-    const uint16_t chunk = WRAP_SLOT(a_inc(&scheduled));
-
-    uint128_t expected = load_lo(&slots[chunk]) == DONE ? DONE : EMPTY;
-    while (!a128_cmp_exchange(&slots[chunk], &expected, new_value)) {
-        expected = expected == DONE ? DONE : EMPTY;
-    }
-
-    if (expected == DONE) {
-        syscall(SYS_futex, &slots[chunk], FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
-    }
+    uint8_t chunk = atomic_inc(&scheduled);
+    uint128_t old = load_lo(&slots[chunk]);
+    do {
+        if (old == SHUTDOWN) return;
+        if (old) syscall(SYS_futex, &slots[chunk], FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+        old = old == DONE; // exchange only if EMPTY (0) or DONE (1)
+    } while (!atomic128_cas(&slots[chunk], &old, packed));
 }
 
 void thread_pool_initialize() {
-    const int num_threads = sysconf(_SC_NPROCESSORS_CONF);
-    threads = malloc(num_threads * sizeof(pthread_t));
-
-    for (int i = 0; i < num_threads; i++) {
-        pthread_create(&threads[i], NULL, worker_thread, NULL);
-    }
+    int n = sysconf(_SC_NPROCESSORS_CONF);
+    threads = calloc(n + 1, sizeof(pthread_t));
+    while (n--) pthread_create(++threads, NULL, worker_thread, NULL);
 }
 
 void thread_pool_destroy() {
-    uint64_t lowest = a_load(&scheduled);
-    while (lowest <= a_load(&assigned)) {
-        uint16_t chunk = WRAP_SLOT(lowest++);
+    for (int chunk = 0; chunk < MAX_SLOTS; chunk++) {
+        atomic128_store(&slots[chunk], SHUTDOWN);
         syscall(SYS_futex, &slots[chunk], FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
     }
 
-    for (int i = 0; i < sysconf(_SC_NPROCESSORS_CONF); i++) {
-        pthread_join(threads[i], NULL);
-    }
-
+    while(*threads) pthread_join(*threads--, NULL);
     free(threads);
 }

@@ -8,26 +8,24 @@
 #include <linux/futex.h>
 
 #define uint128_t __uint128_t
-#define MAX_SLOTS 512
+#define MAX_SLOTS (((uint8_t)~0) + 1)
 #define CACHE_LINE_SIZE 64
-#define WRAP_SLOT(x) ((x) & (MAX_SLOTS - 1))
 #define EMPTY 0
 #define DONE 1
-
+#define SHUTDOWN 4
 #define VIRTUAL_ADDRESS_MASK 0xFFFFFFFFFFFFULL
 
-#define a_load(ptr)         atomic_load_explicit((ptr), memory_order_relaxed)
-#define a_inc(ptr)          atomic_fetch_add_explicit((ptr), 1ULL, memory_order_relaxed)
-
 typedef struct {
-    uint128_t value;
-    char padding[CACHE_LINE_SIZE - sizeof(uint128_t)];
+    __uint128_t value;
+    char padding[CACHE_LINE_SIZE - sizeof(__uint128_t)];
 } __attribute__((aligned(CACHE_LINE_SIZE))) uint128_t_padded;
 
-static inline int __a128_cmp_exchange(
-    uint128_t *address,
-    uint128_t *expected,
-    uint128_t desired
+#define atomic_inc(ptr) atomic_fetch_add_explicit((ptr), 1ULL, memory_order_relaxed)
+
+static inline int __atomic128_cas(
+    __uint128_t *address,
+    __uint128_t *expected,
+    __uint128_t desired
 ) {
     int success;
     uint64_t *exp_lo = (uint64_t *)expected;
@@ -45,8 +43,8 @@ static inline int __a128_cmp_exchange(
     return success;
 }
 
-#define a128_cmp_exchange(ptr, expected, desired) \
-    __a128_cmp_exchange(((uint128_t*)ptr), expected, desired)
+#define atomic128_cas(ptr, expected, desired) \
+    __atomic128_cas(((__uint128_t*)ptr), expected, desired)
 
 static inline __uint128_t __atomic128_load(__uint128_t const *address) {
     __uint128_t result;
@@ -60,9 +58,21 @@ static inline __uint128_t __atomic128_load(__uint128_t const *address) {
 }
 
 #define atomic128_load(ptr) \
-    __atomic128_load(((uint128_t*)ptr))
+    __atomic128_load(((__uint128_t*)ptr))
 
-static inline uint64_t __load_lo(uint128_t* ptr) {
+static inline void __atomic128_store(__uint128_t *address, __uint128_t value) {
+    __asm__ __volatile__ (
+        "movdqa %1, %0"
+        : "=m" (*address)
+        : "x" (value)
+        : "memory"
+    );
+}
+
+#define atomic128_store(ptr, value) \
+    __atomic128_store((__uint128_t*)(ptr), value)
+
+static inline uint64_t __load_lo(__uint128_t* ptr) {
     uint64_t result;
     __asm__ __volatile__(
         "movq %1, %0"
@@ -73,7 +83,7 @@ static inline uint64_t __load_lo(uint128_t* ptr) {
     return result;
 }
 
-#define load_lo(ptr) __load_lo(((uint128_t*)ptr))
+#define load_lo(ptr) __load_lo(((__uint128_t*)ptr))
 
 typedef void (*TaskFunc)(void* user_data);
 typedef void (*TaskDestroy)(void* data);
