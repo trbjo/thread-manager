@@ -13,7 +13,6 @@
 #define EMPTY 0
 #define DONE 1
 #define SHUTDOWN 4
-#define VIRTUAL_ADDRESS_MASK 0xFFFFFFFFFFFFULL
 
 typedef struct {
     __uint128_t value;
