@@ -1,30 +1,12 @@
 #include <stdlib.h>
 #include <pthread.h>
-#include <assert.h>
-#include <stdio.h>
 #include "thread-manager.h"
 
-static atomic_ulong __attribute__((aligned(CACHE_LINE_SIZE))) assigned = 0;
-static atomic_ulong __attribute__((aligned(CACHE_LINE_SIZE))) scheduled = 0;
-static uint128_t_padded slots[MAX_SLOTS] __attribute__((aligned(CACHE_LINE_SIZE)));
-static pthread_t* threads;
-
-
-void thread_pool_run(TaskFunc func, void* data, TaskDestroy destroy) {
-    int64_t data_diff = ((uint64_t)data - (uint64_t)func) >> PTR_ALIGN_SHIFT;
-    int64_t destroy_diff = ((uint64_t)destroy - (uint64_t)func) >> PTR_ALIGN_SHIFT;
-    uint128_t packed = ((uint128_t)(data_diff & DIFF_MASK) << DATA_SHIFT) |
-                      ((uint128_t)(destroy_diff & DIFF_MASK) << DESTROY_SHIFT) |
-                      (((uint64_t)func >> PTR_ALIGN_SHIFT) & FUNC_MASK);
-
-    uint8_t chunk = atomic_inc(&scheduled);
-    uint128_t old = load_lo(&slots[chunk]);
-    do {
-        if (old == SHUTDOWN) return;
-        if (old) syscall(SYS_futex, &slots[chunk], FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
-        old = old == DONE;
-    } while (!atomic128_cas(&slots[chunk], &old, packed));
-}
+static atomic_ulong        ALIGNED assigned = 0;
+static atomic_ulong        ALIGNED scheduled = 0;
+static uint128_t_padded    ALIGNED slots[MAX_SLOTS];
+static pthread_t           ALIGNED threads_array[MAX_THREADS];
+static _Atomic(pthread_t*) ALIGNED threads = threads_array;
 
 static void* worker_thread(void* arg) {
     uint8_t chunk = atomic_inc(&assigned);
@@ -33,10 +15,13 @@ static void* worker_thread(void* arg) {
         if (task == SHUTDOWN) return NULL;
 
         if (task > DONE && atomic128_cas(&slots[chunk], &task, EMPTY)) {
-            uint64_t func_addr = (task & FUNC_MASK) << PTR_ALIGN_SHIFT;
-            TaskFunc func = (TaskFunc)func_addr;
-            TaskDestroy destroy = (TaskDestroy)(func_addr + (SIGN_EXTEND((task >> DESTROY_SHIFT) & DIFF_MASK) << PTR_ALIGN_SHIFT));
-            void* data = (void*)(func_addr + (SIGN_EXTEND((task >> DATA_SHIFT) & DIFF_MASK) << PTR_ALIGN_SHIFT));
+            int is_data_diff = task & 1;
+            TaskFunc func = (TaskFunc)(uint64_t)((task >> 1 & PTR_MASK) << PTR_ALIGN_SHIFT);
+            uint64_t second_ptr = ((task >> SECOND_PTR) & PTR_MASK) << PTR_ALIGN_SHIFT;
+            uint64_t third_ptr = (uint64_t)func + (((int64_t)(task >> DIFF_START) << SIGN_EXTEND_SHIFT) >> (SIGN_EXTEND_SHIFT - PTR_ALIGN_SHIFT));
+
+            void* data = (void*)(is_data_diff ? third_ptr : second_ptr);
+            TaskDestroy destroy = (TaskDestroy)(is_data_diff ? second_ptr : third_ptr);
 
             func(data);
             if (destroy) destroy(data);
@@ -47,10 +32,35 @@ static void* worker_thread(void* arg) {
     }
 }
 
+void thread_pool_run(TaskFunc func, void* data, TaskDestroy destroy) {
+    if (!func) return;
+
+    int64_t data_diff = (data - (void*)func);
+    int64_t destroy_diff = (destroy - func);
+    int64_t is_data_diff = llabs(data_diff) < llabs(destroy_diff);
+
+    uint128_t packed = is_data_diff;
+    packed |= ((uint128_t)(uint64_t)func >> PTR_ALIGN_SHIFT) << 1;
+    packed |= (uint128_t)(uint64_t)(is_data_diff ? destroy : data) >> PTR_ALIGN_SHIFT << SECOND_PTR;
+    packed |= (uint128_t)(is_data_diff ? data_diff : destroy_diff) >> PTR_ALIGN_SHIFT << DIFF_START;
+
+    uint8_t chunk = atomic_inc(&scheduled);
+    uint128_t old = load_lo(&slots[chunk]);
+    do {
+        if (old == SHUTDOWN) return;
+        if (old) syscall(SYS_futex, &slots[chunk], FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+        old = old == DONE;
+    } while (!atomic128_cas(&slots[chunk], &old, packed));
+}
+
+int thread_pool_run_new_thread(TaskFunc func, void* data, TaskDestroy destroy) {
+    thread_pool_run(func, data, destroy);
+    pthread_create(atomic_ptr_inc(&threads), NULL, worker_thread, NULL);
+    return atomic_load(&threads) - threads_array;
+}
+
 void thread_pool_initialize() {
-    int n = sysconf(_SC_NPROCESSORS_CONF);
-    threads = calloc(n + 1, sizeof(pthread_t));
-    while (n--) pthread_create(++threads, NULL, worker_thread, NULL);
+    while (sysconf(_SC_NPROCESSORS_CONF) > thread_pool_run_new_thread(NULL, NULL, NULL));
 }
 
 void thread_pool_destroy() {
@@ -58,7 +68,5 @@ void thread_pool_destroy() {
         atomic128_store(&slots[chunk], SHUTDOWN);
         syscall(SYS_futex, &slots[chunk], FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
     }
-
-    while(*threads) pthread_join(*threads--, NULL);
-    free(threads);
+    while (atomic_ptr_dec(&threads) > threads_array) pthread_join(*atomic_load(&threads), NULL);
 }

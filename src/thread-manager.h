@@ -14,12 +14,25 @@
 #define DONE 1
 #define SHUTDOWN 4
 
+#define PTR_ALIGN_SHIFT 4
+#define PTR_BITS 43
+#define SECOND_PTR 44
+#define DIFF_START 87
+#define DIFF_BITS 41
+#define MAX_THREADS 32
+#define ALIGNED __attribute__((aligned(CACHE_LINE_SIZE)))
+
+#define PTR_MASK ((1ULL << PTR_BITS) - 1)
+#define SIGN_EXTEND_SHIFT (64 - DIFF_BITS)
+
 typedef struct {
     __uint128_t value;
     char padding[CACHE_LINE_SIZE - sizeof(__uint128_t)];
 } __attribute__((aligned(CACHE_LINE_SIZE))) uint128_t_padded;
 
-#define atomic_inc(ptr) atomic_fetch_add_explicit((ptr), 1ULL, memory_order_relaxed)
+#define atomic_inc(ptr) __atomic_fetch_add((ptr), 1, __ATOMIC_RELAXED)
+#define atomic_ptr_dec(ptr) __atomic_fetch_sub((ptr), sizeof(pthread_t), __ATOMIC_RELAXED)
+#define atomic_ptr_inc(ptr) __atomic_fetch_add((ptr), sizeof(pthread_t), __ATOMIC_RELAXED)
 
 static inline int __atomic128_cas(
     __uint128_t *address,
@@ -90,5 +103,6 @@ typedef void (*TaskDestroy)(void* data);
 void thread_pool_initialize();
 void thread_pool_destroy();
 void thread_pool_run(TaskFunc task, void* task_user_data, TaskDestroy task_destroy);
+int thread_pool_run_new_thread(TaskFunc task, void* task_user_data, TaskDestroy task_destroy);
 
 #endif
