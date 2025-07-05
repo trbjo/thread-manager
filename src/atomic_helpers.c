@@ -8,12 +8,10 @@ int is_locked(atomic_int* lock) {
     return 0;
 }
 
-int spin_lock(atomic_int* lock) {
-    if (atomic_exchange(lock, 1)) {
+void spin_lock(atomic_int* lock) {
+    while (atomic_exchange(lock, 1)) {
         CPU_PAUSE();
-        return 0;
     }
-    return 1;
 }
 
 void spin_unlock(atomic_int* lock) {

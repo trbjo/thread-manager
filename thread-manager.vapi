@@ -6,10 +6,10 @@ namespace Threads {
     public static extern void run(owned TaskFunc task);
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_spawn_joinable", has_type_id=false)]
-    public static extern uint64 spawn_joinable(owned TaskFunc task);
+    public static extern uint spawn_joinable(owned TaskFunc task);
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_join", has_type_id=false)]
-    public static extern void join(uint64 thread_id);
+    public static extern void join(uint thread_id);
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_new_thread", has_type_id=false)]
     public static extern void new_thread();
@@ -53,11 +53,11 @@ namespace Spinlock {
     [CCode (has_type_id = false, cname = "atomic_int")]
     public struct AtomicInt { }
 
-    [CCode (cheader_filename = "atomic_helpers.h", cname = "spin_lock", has_type_id=false)]
-    public static extern bool spin_lock (ref AtomicInt lock);
-
     [CCode (cheader_filename = "atomic_helpers.h", cname = "is_locked", has_type_id=false)]
     public static extern bool is_locked (ref AtomicInt lock);
+
+    [CCode (cheader_filename = "atomic_helpers.h", cname = "spin_lock", has_type_id=false)]
+    public static extern void spin_lock (ref AtomicInt lock);
 
     [CCode (cheader_filename = "atomic_helpers.h", cname = "spin_unlock", has_type_id=false)]
     public static extern void spin_unlock (ref AtomicInt lock);

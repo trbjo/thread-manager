@@ -10,8 +10,8 @@
 #endif
 
 
-int spin_lock(atomic_int *lock);
 int is_locked(atomic_int *lock);
+void spin_lock(atomic_int *lock);
 void spin_unlock(atomic_int *lock);
 
 #endif
