@@ -62,4 +62,3 @@ namespace Spinlock {
     [CCode (cheader_filename = "atomic_helpers.h", cname = "spin_unlock", has_type_id=false)]
     public static extern void spin_unlock (ref AtomicInt lock);
 }
-
