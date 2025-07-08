@@ -50,7 +50,7 @@ namespace Atomics {
 namespace Spinlock {
     [SimpleType]
     [IntegerType (rank = 5)]
-    [CCode (has_type_id = false, cname = "atomic_int")]
+    [CCode (has_type_id = false, cname = "aligned_atomic_int")]
     public struct AtomicInt { }
 
     [CCode (cheader_filename = "atomic_helpers.h", cname = "is_locked", has_type_id=false)]
