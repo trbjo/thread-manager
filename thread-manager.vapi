@@ -6,10 +6,10 @@ namespace Threads {
     public static extern void run(owned TaskFunc task);
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_spawn_joinable", has_type_id=false)]
-    public static extern uint spawn_joinable(owned TaskFunc task);
+    public static extern ulong spawn_joinable(owned TaskFunc task);
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_join", has_type_id=false)]
-    public static extern void join(uint thread_id);
+    public static extern void join(ulong thread_id);
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_new_thread", has_type_id=false)]
     public static extern void new_thread();
