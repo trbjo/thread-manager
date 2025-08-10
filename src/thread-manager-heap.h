@@ -7,7 +7,7 @@
 #include <sys/syscall.h>
 #include <linux/futex.h>
 
-#define MAX_SLOTS (((uint8_t)~0) + 1)
+#define MAX_SLOTS (((uint16_t)~0) + 1)
 
 #define EMPTY 0
 #define SLEEPING 1
@@ -39,7 +39,7 @@ typedef void (*TaskDestroy)(void *data);
 
 #define thread_pool_join(thread_id) pthread_join(thread_id, NULL)
 
-uint8_t thread_pool_schedule_task(TaskFunc func, void *data, TaskDestroy destroy, uint64_t should_exit);
+uint16_t thread_pool_schedule_task(TaskFunc func, void *data, TaskDestroy destroy, uint64_t should_exit);
 #define thread_pool_run(func, data, destroy) thread_pool_schedule_task(func, data, destroy, 0)
 
 void* worker_thread(void* arg);

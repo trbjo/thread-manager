@@ -22,7 +22,7 @@ static task_data* create_task(TaskFunc func, void* data, TaskDestroy destroy) {
 }
 
 void* worker_thread(void* arg) {
-    uint8_t chunk = atomic_inc(&assigned);
+    uint16_t chunk = atomic_inc(&assigned);
     uint64_t thread_id = (uint64_t)pthread_self() << PTR_SHIFT;
 
     while (1) {
@@ -42,11 +42,11 @@ void* worker_thread(void* arg) {
     }
 }
 
-uint8_t thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy, uint64_t should_exit) {
+uint16_t thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy, uint64_t should_exit) {
     task_data* task = create_task(func, data, destroy);
     if (!task) return 0;
 
-    uint8_t chunk = atomic_inc(&scheduled);
+    uint16_t chunk = atomic_inc(&scheduled);
     uint64_t task_ptr = ((uint64_t)task << PTR_SHIFT) | TASK_FLAG;
     if (should_exit) task_ptr |= EXIT_FLAG;
 
@@ -61,7 +61,7 @@ uint8_t thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy
 
 uint64_t thread_pool_spawn_joinable(TaskFunc func, void* data, TaskDestroy destroy) {
     thread_pool_new_thread();
-    uint8_t chunk = thread_pool_schedule_task(func, data, destroy, 1);
+    uint16_t chunk = thread_pool_schedule_task(func, data, destroy, 1);
     while (!IS_THREAD_ID(a_load(&slots[chunk]))) CPU_PAUSE();
     return a_exchange(&slots[chunk], EMPTY) >> PTR_SHIFT;
 }
