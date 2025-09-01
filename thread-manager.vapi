@@ -47,18 +47,31 @@ namespace Atomics {
     public static extern void store(ref int ptr, int value);
 }
 
+[CCode (cheader_filename = "stdatomic.h")]
+namespace AtomicUlong {
+    [CCode (cname = "atomic_store")]
+    public static void store (ref ulong ptr, ulong val);
+
+    [CCode (cname = "atomic_load")]
+    public static ulong load (ref ulong ptr);
+}
+
 namespace Spinlock {
-    [SimpleType]
-    [IntegerType (rank = 5)]
-    [CCode (has_type_id = false, cname = "aligned_atomic_int")]
+    [CCode (cname = "aligned_atomic_int", has_type_id = false)]
     public struct AtomicInt { }
 
-    [CCode (cheader_filename = "atomic_helpers.h", cname = "is_locked", has_type_id=false)]
-    public static extern bool is_locked (ref AtomicInt lock);
+    [CCode (cname = "aligned_atomic_int_new", cheader_filename = "atomic_helpers.h")]
+    public static extern AtomicInt* new ();
 
-    [CCode (cheader_filename = "atomic_helpers.h", cname = "spin_lock", has_type_id=false)]
-    public static extern void spin_lock (ref AtomicInt lock);
+    [CCode (cname = "aligned_atomic_int_free", cheader_filename = "atomic_helpers.h")]
+    public static extern void free (AtomicInt* ptr);
 
-    [CCode (cheader_filename = "atomic_helpers.h", cname = "spin_unlock", has_type_id=false)]
-    public static extern void spin_unlock (ref AtomicInt lock);
+    [CCode (cname = "is_locked", cheader_filename = "atomic_helpers.h")]
+    public static extern bool is_locked (AtomicInt* lock);
+
+    [CCode (cname = "spin_lock", cheader_filename = "atomic_helpers.h")]
+    public static extern void spin_lock (AtomicInt* lock);
+
+    [CCode (cname = "spin_unlock", cheader_filename = "atomic_helpers.h")]
+    public static extern void spin_unlock (AtomicInt* lock);
 }

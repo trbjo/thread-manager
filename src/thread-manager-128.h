@@ -3,11 +3,12 @@
 
 #include <stdatomic.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <sys/syscall.h>
 #include <linux/futex.h>
 
-#define MAX_SLOTS (((uint16_t)~0) + 1)
+#define MAX_SLOTS 256
 #define uint128_t __uint128_t
 
 #define EMPTY 0
@@ -31,20 +32,15 @@
 #define MAX_PTHREAD_T (0xFFFFFFFFFFFFFFFFUL)
 #define DATA_FLAG ((uint128_t)1 << (PTR_BITS))
 
-#define second_ptr(t) (int64_t) ((t >> SECOND_PTR & SCND_PTR_MASK) << SCND_PTR_ALIGN_SHIFT)
+#define second_ptr(t) (int64_t)(((t >> SECOND_PTR) & SCND_PTR_MASK) << SCND_PTR_ALIGN_SHIFT)
 #define third_ptr(t) \
     ({ \
-        int64_t offset = ((int64_t)(t >> DIFF_START) << SIGN_EXTEND_SHIFT) >> SIGN_EXTEND_SHIFT; \
-        offset ? (int64_t)((int64_t)(t & PTR_MASK) + offset) << PTR_ALIGN_SHIFT : 0; \
+        int64_t offset = ((int64_t)((t >> DIFF_START) << SIGN_EXTEND_SHIFT)) >> SIGN_EXTEND_SHIFT; \
+        offset ? (int64_t)(((int64_t)(t & PTR_MASK) + offset) << PTR_ALIGN_SHIFT) : 0; \
     })
 
 #define CACHE_LINE_SIZE 64
 #define CACHE_ALIGNED __attribute__((aligned(CACHE_LINE_SIZE)))
-
-typedef struct {
-    __uint128_t value;
-    char padding[CACHE_LINE_SIZE - sizeof(__uint128_t)];
-} CACHE_ALIGNED uint128_t_padded;
 
 #define atomic_inc(ptr) __atomic_fetch_add((ptr), 1, __ATOMIC_RELAXED)
 #define atomic_dec(ptr) __atomic_fetch_sub((ptr), 1, __ATOMIC_RELAXED)
@@ -104,7 +100,7 @@ typedef void (*TaskDestroy)(void *data);
 
 #define thread_pool_join(thread_id) pthread_join(thread_id, NULL)
 
-uint16_t thread_pool_schedule_task(TaskFunc func, void *data, TaskDestroy destroy, uint128_t should_exit);
+uint8_t thread_pool_schedule_task(TaskFunc func, void *data, TaskDestroy destroy, uint128_t should_exit);
 #define thread_pool_run(func, data, destroy) thread_pool_schedule_task(func, data, destroy, 0)
 
 void* worker_thread(void* arg);

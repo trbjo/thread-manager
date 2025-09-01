@@ -1,13 +1,14 @@
 #ifndef THREAD_MANAGER_H
 #define THREAD_MANAGER_H
 
+#include <pthread.h>
 #include <stdatomic.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <sys/syscall.h>
 #include <linux/futex.h>
 
-#define MAX_SLOTS (((uint16_t)~0) + 1)
+#define MAX_SLOTS 256
 
 #define EMPTY 0
 #define SLEEPING 1
@@ -29,10 +30,11 @@
 #define a_exchange(ptr, desired) atomic_exchange((atomic_ulong*)ptr, desired)
 #define a_store(ptr, desired) atomic_store((atomic_ulong*)ptr, desired)
 
-typedef struct {
-    atomic_ulong value;
-    char padding[CACHE_LINE_SIZE - sizeof(atomic_ulong)];
-} CACHE_ALIGNED atomic_ulong_padded;
+#ifdef __aarch64__
+    #define CPU_PAUSE() asm volatile("yield" ::: "memory")
+#else
+    #define CPU_PAUSE() __builtin_ia32_pause()
+#endif
 
 typedef void (*TaskFunc)(void *data);
 typedef void (*TaskDestroy)(void *data);

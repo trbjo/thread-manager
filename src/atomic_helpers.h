@@ -16,6 +16,10 @@ typedef struct {
     char padding[CACHE_LINE_SIZE - sizeof(atomic_int)];
 } aligned_atomic_int;
 
+aligned_atomic_int* aligned_atomic_int_new(void);
+void aligned_atomic_int_free(aligned_atomic_int* ptr);
+
+
 int is_locked(aligned_atomic_int *lock);
 void spin_lock(aligned_atomic_int *lock);
 void spin_unlock(aligned_atomic_int *lock);
