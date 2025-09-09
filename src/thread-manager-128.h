@@ -45,23 +45,20 @@
 #define atomic_inc(ptr) __atomic_fetch_add((ptr), 1, __ATOMIC_RELAXED)
 #define atomic_dec(ptr) __atomic_fetch_sub((ptr), 1, __ATOMIC_RELAXED)
 
-static inline int __atomic128_cas(
+static inline int __attribute__((always_inline)) __atomic128_cas(
     __uint128_t *address,
     __uint128_t *expected,
     __uint128_t desired
 ) {
-    int success;
-    uint64_t *exp_lo = (uint64_t *)expected;
-    uint64_t *exp_hi = exp_lo + 1;
+    char success;
     __asm__ __volatile__ (
         "lock; cmpxchg16b %0"
         : "+m" (*address),
-          "+d" (*exp_hi),
-          "+a" (*exp_lo),
+          "+A" (*expected),
           "=@ccz" (success)
         : "c" ((uint64_t)(desired >> 64)),
           "b" ((uint64_t)desired)
-        : "cc", "memory"
+        : "memory"
     );
     return success;
 }
