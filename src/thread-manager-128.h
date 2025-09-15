@@ -13,23 +13,21 @@
 
 #define EMPTY 0
 #define SLEEPING 1
-#define WAKING_UP 2
 
 #define PTR_ALIGN_SHIFT 4
 #define PTR_BITS 43
 #define SCND_PTR_BITS 45
-#define SECOND_PTR 45
+#define SECOND_PTR 44
 #define SCND_PTR_ALIGN_SHIFT 2
-#define DIFF_START 90
+#define DIFF_START 89
 #define DIFF_BITS 38
 #define PTR_MASK ((1ULL << PTR_BITS) - 1)
 #define SCND_PTR_MASK ((1ULL << SCND_PTR_BITS) - 1)
 #define SIGN_EXTEND_SHIFT (64 - DIFF_BITS)
-#define IS_FUNC 0xFFFFFFFFFFFFFFF8ULL
-#define IS_THREAD_ID(x) ((x & ((uint128_t)-1 << 64)) && !(x & ((uint128_t)-1 >> 64)))
+#define IS_THREAD_ID(x) ((x >> 64) != 0 && (x >> 112) == 0 && (x << 64) == 0)
+#define TASK_NOT_THREAD(x) ((((uint64_t)x) > SLEEPING) || (x == EXIT))
 
-#define EXIT_FLAG ((uint128_t)1 << ((PTR_BITS) + 1))
-#define MAX_PTHREAD_T (0xFFFFFFFFFFFFFFFFUL)
+#define EXIT ((uint128_t)1 << 127)
 #define DATA_FLAG ((uint128_t)1 << (PTR_BITS))
 
 #define second_ptr(t) (int64_t)(((t >> SECOND_PTR) & SCND_PTR_MASK) << SCND_PTR_ALIGN_SHIFT)
@@ -97,7 +95,7 @@ typedef void (*TaskDestroy)(void *data);
 
 #define thread_pool_join(thread_id) pthread_join(thread_id, NULL)
 
-uint128_t* thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy, uint128_t should_exit);
+uint128_t* thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy, bool should_exit);
 #define thread_pool_run(func, data, destroy) thread_pool_schedule_task(func, data, destroy, 0)
 
 void* worker_thread(void* arg);
