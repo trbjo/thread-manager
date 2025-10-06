@@ -34,11 +34,20 @@ void* worker_thread(void* arg) {
             slot_ptr = GET_SLOT(task_num);
             task = atomic128_load(slot_ptr);
         } else if (atomic_load(&scheduled) > task_num + 1) {
-            // This condition will be evaluated when there are no tasks in our slot.
-            // This condition will be true when two workers due to slot wraparound
-            // get assigned the same slot. One worker was active, the other one asleep.
-            // If the sleeping worker took longer time than it took for the others
-            // to process MAX_SLOTS tasks, we get a collision.
+            // Wraparound collision detection: We failed to CAS our slot, which under
+            // normal operation can't happen since each worker exclusively owns its slot.
+            // The only explanation is another worker was also assigned this slot number
+            // due to wraparound (one worker slept while MAX_SLOTS+ tasks were scheduled).
+            //
+            // The condition (scheduled-1 > task_num) is sufficient because if newer tasks
+            // exist and we can't grab our slot, we have a collision and should reassign
+            // immediately. No need to check if scheduled-task_num >= MAX_SLOTS - any gap
+            // with a failed CAS means collision.
+            //
+            // Either the lagging worker or the colliding worker can enter this branch
+            // first and resolve it by getting a new assignment.
+            //
+            // Note: This never executes in practice but ensures correctness.
             task_num = atomic_inc(&assigned);
             slot_ptr = GET_SLOT(task_num);
             task = atomic128_load(slot_ptr);
