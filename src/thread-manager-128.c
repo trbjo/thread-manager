@@ -17,9 +17,9 @@ void* worker_thread(void* arg) {
     uint128_t thread_id = ((uint128_t)(uint64_t)pthread_self()) << 64;
     ulong task_num = atomic_inc(&assigned);
     uint128_t* slot_ptr = GET_SLOT(task_num);
-    uint128_t task = atomic128_load(slot_ptr);
 
     while (1) {
+        uint128_t task = atomic128_load(slot_ptr);
         if (TASK_NOT_THREAD(task) && atomic128_cas(slot_ptr, &task, task >= EXIT ? thread_id : EMPTY)) {
             intptr_t func_ptr = ((intptr_t)(task & PTR_MASK)) << PTR_ALIGN_SHIFT;
             intptr_t destroy_ptr = task & DATA_FLAG ? second_ptr(task) : third_ptr(task);
@@ -32,7 +32,6 @@ void* worker_thread(void* arg) {
 
             task_num = atomic_inc(&assigned);
             slot_ptr = GET_SLOT(task_num);
-            task = atomic128_load(slot_ptr);
         } else if (atomic_load(&scheduled) > task_num + 1) {
             // Wraparound collision detection: We failed to CAS our slot, which under
             // normal operation can't happen since each worker exclusively owns its slot.
@@ -50,10 +49,8 @@ void* worker_thread(void* arg) {
             // Note: This never executes in practice but ensures correctness.
             task_num = atomic_inc(&assigned);
             slot_ptr = GET_SLOT(task_num);
-            task = atomic128_load(slot_ptr);
         } else if (task == EMPTY && atomic128_cas(slot_ptr, &task, SLEEPING)) {
             syscall(SYS_futex, slot_ptr, FUTEX_WAIT_PRIVATE, SLEEPING, NULL, NULL, 0);
-            task = atomic128_load(slot_ptr);
         }
     }
 }
