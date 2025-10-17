@@ -8,7 +8,6 @@
 #include <sys/syscall.h>
 #include <linux/futex.h>
 
-#define MAX_SLOTS 256
 #define uint128_t __uint128_t
 
 #define EMPTY 0
@@ -25,7 +24,7 @@
 #define SCND_PTR_MASK ((1ULL << SCND_PTR_BITS) - 1)
 #define SIGN_EXTEND_SHIFT (64 - DIFF_BITS)
 #define IS_THREAD_ID(x) ((x >> 64) != 0 && (x >> 112) == 0 && (x << 64) == 0)
-#define TASK_NOT_THREAD(x) ((((uint64_t)x) > SLEEPING) || (x == EXIT))
+#define IS_TASK(x) ((((uint64_t)x) > SLEEPING) || (x == EXIT))
 
 #define EXIT ((uint128_t)1 << 127)
 #define DATA_FLAG ((uint128_t)1 << (PTR_BITS))
@@ -90,8 +89,8 @@ static inline void __atomic128_store(__uint128_t *address, __uint128_t value) {
 #define atomic128_store(ptr, val) \
     __atomic128_store(((__uint128_t*)ptr), val)
 
-typedef void (*TaskFunc)(void *data);
-typedef void (*TaskDestroy)(void *data);
+typedef void (*TaskFunc)(void* data);
+typedef void (*TaskDestroy)(void* data);
 
 #define thread_pool_join(thread_id) pthread_join(thread_id, NULL)
 
@@ -100,7 +99,7 @@ uint128_t* thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy dest
 
 void* worker_thread(void* arg);
 #define thread_pool_new_thread() pthread_create(&(pthread_t){0}, NULL, worker_thread, NULL)
-uint64_t thread_pool_spawn_joinable(TaskFunc task, void *task_user_data, TaskDestroy task_destroy);
+uint64_t thread_pool_spawn_joinable(TaskFunc task, void* task_user_data, TaskDestroy task_destroy);
 void thread_pool_join_all();
 
 int thread_pool_num_cores();
