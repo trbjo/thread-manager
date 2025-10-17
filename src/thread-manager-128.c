@@ -15,12 +15,11 @@ static uint128_t        CACHE_ALIGNED slots[MAX_SLOTS];
 
 void* worker_thread(void* arg) {
     uint128_t thread_id = ((uint128_t)(uint64_t)pthread_self()) << 64;
-    ulong task_num = atomic_inc(&assigned);
-    uint128_t* slot_ptr = GET_SLOT(task_num);
+    uint128_t* slot_ptr = GET_SLOT(atomic_inc(&assigned));
+    uint128_t task = atomic128_load(slot_ptr);
 
     while (1) {
-        uint128_t task = atomic128_load(slot_ptr);
-        if (TASK_NOT_THREAD(task) && atomic128_cas(slot_ptr, &task, task >= EXIT ? thread_id : EMPTY)) {
+        if (IS_TASK(task) && atomic128_cas(slot_ptr, &task, task >= EXIT ? thread_id : EMPTY)) {
             intptr_t func_ptr = ((intptr_t)(task & PTR_MASK)) << PTR_ALIGN_SHIFT;
             intptr_t destroy_ptr = task & DATA_FLAG ? second_ptr(task) : third_ptr(task);
             void* data = (void*)(~task & DATA_FLAG ? second_ptr(task) : third_ptr(task));
@@ -30,27 +29,13 @@ void* worker_thread(void* arg) {
 
             if (task >= EXIT) return NULL;
 
-            task_num = atomic_inc(&assigned);
-            slot_ptr = GET_SLOT(task_num);
-        } else if (atomic_load(&scheduled) > task_num + 1) {
-            // Wraparound collision detection: We failed to CAS our slot, which under
-            // normal operation can't happen since each worker exclusively owns its slot.
-            // The only explanation is another worker was also assigned this slot number
-            // due to wraparound (one worker slept while MAX_SLOTS+ tasks were scheduled).
-            //
-            // The condition (scheduled-1 > task_num) is sufficient because if newer tasks
-            // exist and we can't grab our slot, we have a collision and should reassign
-            // immediately. No need to check if scheduled-task_num >= MAX_SLOTS - any gap
-            // with a failed CAS means collision.
-            //
-            // Either the lagging worker or the colliding worker can enter this branch
-            // first and resolve it by getting a new assignment.
-            //
-            // Note: This never executes in practice but ensures correctness.
-            task_num = atomic_inc(&assigned);
-            slot_ptr = GET_SLOT(task_num);
+            slot_ptr = GET_SLOT(atomic_inc(&assigned));
+            task = atomic128_load(slot_ptr);
         } else if (task == EMPTY && atomic128_cas(slot_ptr, &task, SLEEPING)) {
             syscall(SYS_futex, slot_ptr, FUTEX_WAIT_PRIVATE, SLEEPING, NULL, NULL, 0);
+            task = atomic128_load(slot_ptr);
+        } else if (!IS_TASK(task)) {
+            task = atomic128_load(slot_ptr);
         }
     }
 }
@@ -73,7 +58,7 @@ uint128_t* thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy dest
     do {
         expected = expected == SLEEPING; // exchange EMPTY (0) or SLEEPING (1) slots only
     } while (!atomic128_cas(slot_ptr, &expected, packed));
-    if (expected) syscall(SYS_futex, slot_ptr, FUTEX_WAKE_PRIVATE, INT32_MAX, NULL, NULL, 0);
+    if (expected) syscall(SYS_futex, slot_ptr, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
 
     return slot_ptr;
 }
@@ -92,11 +77,11 @@ void thread_pool_join_all() {
     do {
         mask = EMPTY;
         for (int chunk = 0; chunk < MAX_SLOTS; chunk++) {
-            uint128_t *slot_ptr = GET_SLOT(chunk);
+            uint128_t* slot_ptr = GET_SLOT(chunk);
             uint128_t value = (uint128_t)SLEEPING;
 
             if (atomic128_cas(slot_ptr, &value, EXIT)) {
-                syscall(SYS_futex, slot_ptr, FUTEX_WAKE_PRIVATE, INT32_MAX, NULL, NULL, 0);
+                syscall(SYS_futex, slot_ptr, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
             } else if (IS_THREAD_ID(value) && atomic128_cas(slot_ptr, &value, EMPTY)) {
                 thread_pool_join(value >> 64);
                 value = EMPTY;
