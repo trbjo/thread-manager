@@ -2,26 +2,20 @@ namespace Threads {
     [CCode (cheader_filename = "thread-manager.h", has_target = true, delegate_target = true, has_type_id=false)]
     public delegate void TaskFunc();
 
+    [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_init", has_type_id=false)]
+    public static extern void init(int reserve_slow_cores);
+
+    [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_pin_caller", has_type_id=false)]
+    public static extern void pin_caller();
+
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_run", has_type_id=false)]
     public static extern void run(owned TaskFunc task);
-
-    [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_spawn_joinable", has_type_id=false)]
-    public static extern ulong spawn_joinable(owned TaskFunc task);
-
-    [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_join", has_type_id=false)]
-    public static extern void join(ulong thread_id);
-
-    [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_new_thread", has_type_id=false)]
-    public static extern void new_thread();
-
-    [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_num_cores", has_type_id=false)]
-    public static extern int num_cores();
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_join_all", has_type_id=false)]
     public static extern void join_all();
 
-    [CCode (cheader_filename = "immintrin.h", cname = "_mm_pause", has_type_id=false)]
-    public static extern void pause();
+    [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_num_cores", has_type_id=false)]
+    public static extern int num_cores();
 }
 
 namespace Atomics {

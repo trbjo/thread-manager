@@ -80,8 +80,8 @@ static inline __uint128_t __atomic128_load(__uint128_t const *address) {
 static inline void __atomic128_store(__uint128_t *address, __uint128_t value) {
     __asm__ __volatile__ (
         "movdqa %1, %0"
-        : "=m" (*address)  // output is the memory location
-        : "x" (value)      // input is the value in register
+        : "=m" (*address)
+        : "x" (value)
         : "memory"
     );
 }
@@ -94,14 +94,13 @@ typedef void (*TaskDestroy)(void* data);
 
 #define thread_pool_join(thread_id) pthread_join(thread_id, NULL)
 
-uint128_t* thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy, bool should_exit);
-#define thread_pool_run(func, data, destroy) thread_pool_schedule_task(func, data, destroy, 0)
-
+void thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy);
+#define thread_pool_run(func, data, destroy) thread_pool_schedule_task(func, data, destroy)
 void* worker_thread(void* arg);
-#define thread_pool_new_thread() pthread_create(&(pthread_t){0}, NULL, worker_thread, NULL)
-uint64_t thread_pool_spawn_joinable(TaskFunc task, void* task_user_data, TaskDestroy task_destroy);
 void thread_pool_join_all();
 
-int thread_pool_num_cores();
+void thread_pool_init(int num_workers);
+void thread_pool_pin_caller(void);
+int thread_pool_num_cores(void);
 
 #endif
