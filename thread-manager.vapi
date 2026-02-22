@@ -5,9 +5,6 @@ namespace Threads {
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_init", has_type_id=false)]
     public static extern void init(int cores, bool pin_cores);
 
-    [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_pin_caller", has_type_id=false)]
-    public static extern void pin_caller();
-
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_run", has_type_id=false)]
     public static extern void run(owned TaskFunc task);
 
