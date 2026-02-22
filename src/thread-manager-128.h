@@ -24,7 +24,7 @@
 #define SCND_PTR_MASK ((1ULL << SCND_PTR_BITS) - 1)
 #define SIGN_EXTEND_SHIFT (64 - DIFF_BITS)
 #define IS_THREAD_ID(x) ((x >> 64) != 0 && (x >> 112) == 0 && (x << 64) == 0)
-#define IS_TASK(x) ((((uint64_t)x) > SLEEPING) || (x == EXIT))
+#define IS_TASK(x) ((((uint64_t)x) > EMPTY) || (x == EXIT))
 
 #define EXIT ((uint128_t)1 << 127)
 #define DATA_FLAG ((uint128_t)1 << (PTR_BITS))
@@ -96,11 +96,10 @@ typedef void (*TaskDestroy)(void* data);
 
 void thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy);
 #define thread_pool_run(func, data, destroy) thread_pool_schedule_task(func, data, destroy)
-void* worker_thread(void* arg);
+
 void thread_pool_join_all();
 
 void thread_pool_init(int num_workers);
-void thread_pool_pin_caller(void);
 int thread_pool_num_cores(void);
 
 #endif

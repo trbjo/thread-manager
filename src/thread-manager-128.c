@@ -1,4 +1,6 @@
 #include <stdlib.h>
+#include <stdio.h>
+#include <assert.h>
 #include "thread-manager-128.h"
 
 #define MAX_SLOTS 65536
@@ -96,6 +98,30 @@ static int find_free_core(void) {
     return -1;
 }
 
+static void* worker_thread(void* arg) {
+    unsigned long my_slot = atomic_inc(&assigned);
+    uint128_t* slot_ptr = GET_SLOT(my_slot);
+
+    while (1) {
+        uint128_t task = atomic128_load(slot_ptr);
+        if (task && atomic128_cas(slot_ptr, &task, EMPTY)) {
+            int64_t func_ptr = ((int64_t)(task & PTR_MASK)) << PTR_ALIGN_SHIFT;
+            int64_t destroy_ptr = task & DATA_FLAG ? second_ptr(task) : third_ptr(task);
+            void* data = (void*)(~task & DATA_FLAG ? second_ptr(task) : third_ptr(task));
+
+            if (func_ptr) ((TaskFunc)func_ptr)(data);
+            if (destroy_ptr) ((TaskDestroy)destroy_ptr)(data);
+
+            if (task >= EXIT) return NULL;
+
+            my_slot = atomic_inc(&assigned);
+            slot_ptr = GET_SLOT(my_slot);
+        } else if (!task && atomic128_cas(slot_ptr, &task, SLEEPING)) {
+            syscall(SYS_futex, slot_ptr, FUTEX_WAIT_PRIVATE, SLEEPING, NULL, NULL, 0);
+        }
+    }
+}
+
 static pthread_t spawn_worker(int core) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -131,45 +157,8 @@ void thread_pool_init(int n) {
         spawn_worker(find_free_core());
 }
 
-void thread_pool_pin_caller(void) {
-    int c = find_free_core();
-    if (c < 0) return;
-
-    cpu_set_t s;
-    CPU_ZERO(&s);
-    CPU_SET(c, &s);
-    sched_setaffinity(0, sizeof(s), &s);
-}
-
 int thread_pool_new_thread(void) {
     return spawn_worker(find_free_core()) ? 0 : -1;
-}
-
-void* worker_thread(void* arg) {
-    uint128_t* slot_ptr = GET_SLOT(atomic_inc(&assigned));
-    uint128_t task = atomic128_load(slot_ptr);
-
-    while (1) {
-        if (IS_TASK(task) && atomic128_cas(slot_ptr, &task, EMPTY)) {
-            intptr_t func_ptr = ((intptr_t)(task & PTR_MASK)) << PTR_ALIGN_SHIFT;
-            intptr_t destroy_ptr = task & DATA_FLAG ? second_ptr(task) : third_ptr(task);
-            void* data = (void*)(~task & DATA_FLAG ? second_ptr(task) : third_ptr(task));
-
-            if (func_ptr) ((TaskFunc)func_ptr)(data);
-            if (destroy_ptr) ((TaskDestroy)destroy_ptr)(data);
-
-            if (task >= EXIT) return NULL;
-
-            slot_ptr = GET_SLOT(atomic_inc(&assigned));
-            task = atomic128_load(slot_ptr);
-        } else if (task == EMPTY) {
-            ulong s = atomic_load(&scheduled);
-            if (s + num_workers == atomic_load(&assigned)) {
-                syscall(SYS_futex, &scheduled, FUTEX_WAIT_PRIVATE, s, NULL, NULL, 0);
-            }
-            task = atomic128_load(slot_ptr);
-        }
-    }
 }
 
 void thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy) {
@@ -179,31 +168,22 @@ void thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy) {
 
     uint128_t packed = ((uint128_t)(int64_t)func) >> PTR_ALIGN_SHIFT;
     packed |= (uint128_t)is_data_diff << PTR_BITS;
-    packed |= ((uint128_t)(int64_t)(is_data_diff ? destroy : data) >> SCND_PTR_ALIGN_SHIFT) << SECOND_PTR;
-    packed |= (uint128_t)(is_data_diff ? data_diff : destroy_diff) >> PTR_ALIGN_SHIFT << DIFF_START;
+    packed |= ((uint128_t)(int64_t)(is_data_diff ? destroy : data)
+                >> SCND_PTR_ALIGN_SHIFT) << SECOND_PTR;
+    packed |= (uint128_t)(is_data_diff ? data_diff : destroy_diff)
+                >> PTR_ALIGN_SHIFT << DIFF_START;
     packed &= ~EXIT;
 
-    ulong s = atomic_inc(&scheduled);
-    if (atomic_load(&assigned) == s + num_workers) {
-        syscall(SYS_futex, &scheduled, FUTEX_WAKE_PRIVATE, num_workers, NULL, NULL, 0);
-    }
-    uint128_t* slot_ptr = GET_SLOT(s);
+    uint128_t* slot_ptr = GET_SLOT(atomic_inc(&scheduled));
     uint128_t expected = atomic128_load(slot_ptr);
 
     while (1) {
-        if (IS_TASK(expected)) {
-            if (expected < EXIT) {
-                if (atomic128_cas(slot_ptr, &expected, expected | EXIT)) {
-                    thread_pool_new_thread();
-                    sched_yield();
-                }
-            } else {
-                sched_yield();
-                expected = atomic128_load(slot_ptr);
-            }
-        } else if (atomic128_cas(slot_ptr, &expected, packed)) {
+        expected = expected == SLEEPING;
+        if (atomic128_cas(slot_ptr, &expected, packed)) {
+            if (expected) syscall(SYS_futex, slot_ptr, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
             return;
         }
+        sched_yield();
     }
 }
 
@@ -219,17 +199,19 @@ void thread_pool_join_all(void) {
     }
 
     for (int i = 0; i < count; i++) {
-        ulong s = atomic_inc(&scheduled);
-        uint128_t* slot_ptr = GET_SLOT(s);
+        uint128_t* slot_ptr = GET_SLOT(atomic_inc(&scheduled));
         uint128_t expected = atomic128_load(slot_ptr);
 
-        while (!atomic128_cas(slot_ptr, &expected, EXIT)) {
+        while (1) {
+            expected = expected == SLEEPING;
+            if (atomic128_cas(slot_ptr, &expected, EXIT)) {
+                if (expected)
+                    syscall(SYS_futex, slot_ptr, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+                break;
+            }
             sched_yield();
-            expected = atomic128_load(slot_ptr);
         }
     }
-
-    syscall(SYS_futex, &scheduled, FUTEX_WAKE_PRIVATE, count, NULL, NULL, 0);
 
     for (int i = 0; i < count; i++)
         pthread_join(active[i], NULL);
