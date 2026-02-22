@@ -3,7 +3,7 @@ namespace Threads {
     public delegate void TaskFunc();
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_init", has_type_id=false)]
-    public static extern void init(int cores, bool pin_cores);
+    public static extern void init(uint16 cores, bool pin_cores);
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_run", has_type_id=false)]
     public static extern void run(owned TaskFunc task);

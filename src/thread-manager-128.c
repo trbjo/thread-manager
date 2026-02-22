@@ -150,7 +150,7 @@ static pthread_t spawn_worker(int core) {
 
 static int pin_cores = 0;
 
-void thread_pool_init(int n, int pin) {
+void thread_pool_init(uint16_t n, int pin) {
     pin_cores = pin;
     if (pin)
         detect_topology();
