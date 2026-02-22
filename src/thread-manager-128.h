@@ -99,7 +99,7 @@ void thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy);
 
 void thread_pool_join_all();
 
-void thread_pool_init(int num_workers);
+void thread_pool_init(int num_workers, int pin_cores);
 int thread_pool_num_cores(void);
 
 #endif

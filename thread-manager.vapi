@@ -3,7 +3,7 @@ namespace Threads {
     public delegate void TaskFunc();
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_init", has_type_id=false)]
-    public static extern void init(int reserve_slow_cores);
+    public static extern void init(int cores, bool pin_cores);
 
     [CCode (cheader_filename = "thread-manager.h", cname = "thread_pool_pin_caller", has_type_id=false)]
     public static extern void pin_caller();

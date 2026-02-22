@@ -5,7 +5,6 @@
 
 #define MAX_SLOTS 65536
 
-static int              num_workers = 0;
 static int              *core_ids;
 static pthread_t        *worker_tids;
 
@@ -149,16 +148,21 @@ static pthread_t spawn_worker(int core) {
     return tid;
 }
 
-void thread_pool_init(int n) {
-    detect_topology();
-    num_workers = n;
+static int pin_cores = 0;
+
+void thread_pool_init(int n, int pin) {
+    pin_cores = pin;
+    if (pin)
+        detect_topology();
+    else
+        worker_tids = calloc(thread_pool_num_cores(), sizeof(pthread_t));
 
     for (int i = 0; i < n; i++)
-        spawn_worker(find_free_core());
+        spawn_worker(pin ? find_free_core() : -1);
 }
 
 int thread_pool_new_thread(void) {
-    return spawn_worker(find_free_core()) ? 0 : -1;
+    return spawn_worker(pin_cores ? find_free_core() : -1) ? 0 : -1;
 }
 
 void thread_pool_schedule_task(TaskFunc func, void* data, TaskDestroy destroy) {
