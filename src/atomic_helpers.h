@@ -2,6 +2,9 @@
 #define ATOMIC_HELPERS_H
 
 #include <stdatomic.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+#include <linux/futex.h>
 
 #define CACHE_LINE_SIZE 64
 
@@ -23,5 +26,13 @@ void aligned_atomic_int_free(aligned_atomic_int* ptr);
 int is_locked(aligned_atomic_int *lock);
 void spin_lock(aligned_atomic_int *lock);
 void spin_unlock(aligned_atomic_int *lock);
+
+static inline void futex_wait(int *addr, int val) {
+    syscall(SYS_futex, addr, FUTEX_WAIT_PRIVATE, val, NULL, NULL, 0);
+}
+
+static inline void futex_wake(int *addr) {
+    syscall(SYS_futex, addr, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
+}
 
 #endif

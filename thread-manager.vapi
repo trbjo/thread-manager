@@ -69,3 +69,11 @@ namespace Spinlock {
     [CCode (cname = "spin_unlock", cheader_filename = "atomic_helpers.h")]
     public static extern void spin_unlock (AtomicInt* lock);
 }
+
+namespace Futex {
+    [CCode (cname = "futex_wait", cheader_filename = "atomic_helpers.h")]
+    public static extern void wait(ref int addr, int expected);
+
+    [CCode (cname = "futex_wake", cheader_filename = "atomic_helpers.h")]
+    public static extern void wake(ref int addr);
+}
